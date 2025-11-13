@@ -1,3 +1,3 @@
-export default function handler(req, res) {
-  res.status(200).send("Storacha backend is running ✅");
+export default async function handler(req, res) {
+  return res.status(200).json({ ok: true, message: "Storacha backend is running" });
 }

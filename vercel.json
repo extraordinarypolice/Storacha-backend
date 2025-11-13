@@ -1,7 +1,15 @@
 {
   "version": 2,
-  "functions": {
-    "api/delegation.js": { "runtime": "nodejs18.x" },
-    "api/status.js": { "runtime": "nodejs18.x" }
-  }
+  "builds": [
+    {
+      "src": "api/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1.js"
+    }
+  ]
 }

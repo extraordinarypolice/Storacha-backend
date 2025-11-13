@@ -1,59 +1,77 @@
-import http from 'node:http'
-import fs from 'node:fs'
-import { Readable } from 'node:stream'
-import * as Client from '@web3-storage/w3up-client'
-import { StoreMemory } from '@web3-storage/w3up-client/stores/memory'
-import * as Proof from '@web3-storage/w3up-client/proof'
-import { Signer } from '@web3-storage/w3up-client/principal/ed25519'
-import { Form } from 'multiparty'
-import { SERVER_PORT, PRIVATE_KEY, PROOF } from '../env.js'
+import http from "http";
+import multiparty from "multiparty";
+import * as Client from "@storacha/client";
+import * as Proof from "@storacha/client/proof";
+import { Signer } from "@storacha/client/principal/ed25519";
+import { StoreMemory } from "@storacha/client/stores/memory";
 
-const signer = Signer.parse(PRIVATE_KEY)
-const store = new StoreMemory()
-const client = await Client.create({ principal: signer, store })
-const proof = await Proof.parse(PROOF)
-const space = await client.addSpace(proof)
-await client.setCurrentSpace(space.did())
+const SERVER_PORT = process.env.SERVER_PORT || 3000;
+const PRIVATE_KEY = process.env.STORACHA_PRINCIPAL;
+const PROOF = process.env.STORACHA_PROOF;
 
-console.log(`Server DID: ${signer.did()}`)
-console.log(`Space DID: ${space.did()}`)
-const server = http.createServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'POST')
-  if (req.method === 'OPTIONS') {
-    res.statusCode = 204
-    return res.end()
-  }
+if (!PRIVATE_KEY || !PROOF) {
+  console.error("❌ Missing STORACHA_PRINCIPAL or STORACHA_PROOF in environment variables.");
+  process.exit(1);
+}
 
+// Helper to parse uploaded files
+async function parseForm(req) {
+  return new Promise((resolve, reject) => {
+    const form = new multiparty.Form();
+    form.parse(req, (err, fields, files) => {
+      if (err) return reject(err);
+      resolve({ fields, files });
+    });
+  });
+}
+
+async function handleUpload(req, res) {
   try {
-    const files = await new Promise((resolve, reject) => {
-      new Form().parse(req, (err, _, data) => {
-        if (err) return reject(err)
-        resolve(data.files)
-      })
-    })
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
 
-    console.log(`uploading "${files.map(f => f.originalFilename).join('", "')}"...`)
-    const root = await client.uploadDirectory(files.map(f => ({
-      name: f.originalFilename,
-      stream: () => Readable.toWeb(fs.createReadStream(f.path))
-    })))
+    const { files } = await parseForm(req);
+    const file = files.file?.[0];
+    if (!file) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No file uploaded" }));
+      return;
+    }
 
-    // clean up temp files
-    console.log('cleaning up...')
-    await Promise.all(files.map(f => fs.promises.rm(f.path)))
+    const principal = Signer.parse(PRIVATE_KEY);
+    const store = new StoreMemory();
+    const client = await Client.create({ principal, store });
+    const proof = await Proof.parse(PROOF);
+    const space = await client.addSpace(proof);
+    await client.setCurrentSpace(space.did());
 
-    // send root CID back to client
-    res.write(JSON.stringify({ root: root.toString() }))
-    console.log(`success! ${root}`)
-  } catch (err) {
-    console.error(err)
-    res.statusCode = 500
-    res.write(err.message)
-  } finally {
-    res.end()
+    const fileBuffer = await Bun.file(file.path).arrayBuffer();
+    const blob = new Uint8Array(fileBuffer);
+
+    const result = await client.uploadFile(blob);
+    const cid = result.root.toString();
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ cid, gateway: `https://${cid}.ipfs.dweb.link` }));
+  } catch (error) {
+    console.error("Upload failed:", error);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: error.message }));
   }
-})
+}
 
-await new Promise(resolve => server.listen(SERVER_PORT, () => resolve(server)))
-console.log(`Server listening on :${SERVER_PORT}`)
+const server = http.createServer(async (req, res) => {
+  if (req.url === "/upload" && req.method === "POST") {
+    await handleUpload(req, res);
+  } else {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("✅ Storacha backend running");
+  }
+});
+
+server.listen(SERVER_PORT, () => {
+  console.log(`✅ Storacha backend running on port ${SERVER_PORT}`);
+});

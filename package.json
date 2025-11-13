@@ -1,6 +1,7 @@
 {
   "type": "module",
   "dependencies": {
-    "@storacha/client": "^1.8.15"
+    "@storacha/client": "^1.8.15",
+    "dotenv": "^17.2.3"
   }
 }
